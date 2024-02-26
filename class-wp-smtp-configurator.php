@@ -2,6 +2,9 @@
 
 namespace WP_SMTP_Configurator;
 
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\SMTP;
+
 /**
  * WP SMTP Configurator
  */
@@ -29,12 +32,28 @@ class WP_SMTP_Configurator {
 	/**
 	 * @var string
 	 */
-	public const NONCE_ACTION = 'wp_smtp_configurator_nonce_action';
+	protected const NONCE_ACTION = 'wp_smtp_configurator_nonce_action';
 
 	/**
 	 * @var string
 	 */
-	public const NONCE_NAME = 'wp_smtp_configurator_nonce_name';
+	protected const NONCE_NAME = 'wp_smtp_configurator_nonce_name';
+
+	/**
+	 * @var array<string, mixed>
+	 */
+	protected const DEFAULT_CONFIG = array(
+		'is_enable'   => false,
+		'from'        => 'wordpress@example.com',
+		'from_name'   => 'WordPress',
+		'is_smtp'     => true,
+		'host'        => 'example.com',
+		'port'        => SMTP::DEFAULT_SECURE_PORT,
+		'smtp_auth'   => true,
+		'username'    => 'username',
+		'password'    => 'password',
+		'smtp_secure' => PHPMailer::ENCRYPTION_SMTPS,
+	);
 
 	/**
 	 * @var static
@@ -44,18 +63,7 @@ class WP_SMTP_Configurator {
 	/**
 	 * @var array<string, mixed>
 	 */
-	protected $config = array(
-		'is_enable'   => false,
-		'from'        => 'wordpress@example.com',
-		'from_name'   => 'WordPress',
-		'is_smtp'     => true,
-		'host'        => 'example.com',
-		'port'        => 587,
-		'smtp_auth'   => true,
-		'username'    => 'username',
-		'password'    => 'password',
-		'smtp_secure' => 'tls',
-	);
+	protected $config;
 
 	/**
 	 * @return static
@@ -72,7 +80,7 @@ class WP_SMTP_Configurator {
 	 * @return void
 	 */
 	public static function activation(): void {
-		add_option( static::CONFIG_NAME, static::instance()->config );
+		add_option( static::CONFIG_NAME, static::DEFAULT_CONFIG );
 	}
 
 	/**
@@ -89,7 +97,7 @@ class WP_SMTP_Configurator {
 		delete_option( static::CONFIG_NAME );
 	}
 
-	public function __construct() {
+	protected function __construct() {
 		add_action( 'init', array( $this, 'init' ) );
 	}
 
@@ -97,88 +105,64 @@ class WP_SMTP_Configurator {
 	 * @return void
 	 */
 	public function init(): void {
-		$this->config = get_option( static::CONFIG_NAME );
+		$this->load_config();
+		$this->apply_config();
 
 		if ( is_admin() ) {
 			add_action( 'admin_init', array( $this, 'save_config' ) );
 			add_action( 'admin_menu', array( $this, 'add_submenu_page' ) );
 		}
-
-		if ( ! $this->config['is_enable'] ) {
-			return;
-		}
-
-		add_filter( 'wp_mail_from', fn () => $this->config['from'] );
-		add_filter( 'wp_mail_from_name', fn () => $this->config['from_name'] );
-
-		if ( ! $this->config['is_smtp'] ) {
-			return;
-		}
-
-		add_action(
-			'phpmailer_init',
-			function ( \PHPMailer\PHPMailer\PHPMailer $phpmailer ) {
-				$phpmailer->isSMTP();
-				$phpmailer->Host       = $this->config['host'];
-				$phpmailer->Port       = $this->config['port'];
-				$phpmailer->SMTPAuth   = $this->config['smtp_auth'];
-				$phpmailer->Username   = $this->config['username'];
-				$phpmailer->Password   = $this->config['password'];
-				$phpmailer->SMTPSecure = $this->config['smtp_secure'];
-			},
-		);
 	}
 
 	/**
 	 * @return void
 	 */
 	public function save_config(): void {
-		if (
-			! empty( $_POST[ static::NONCE_NAME ] )
-			&& check_admin_referer( static::NONCE_ACTION, static::NONCE_NAME )
-		) {
-			$result      = false;
-			$prev_config = $this->config;
-
-			foreach ( array_keys( $this->config ) as $key ) {
-				$value = null;
-				switch ( $key ) {
-					case 'is_enable':
-					case 'is_smtp':
-					case 'smtp_auth':
-						$value = ! empty( $_POST[ $key ] );
-						break;
-					case 'port':
-						if ( ! empty( $_POST[ $key ] ) ) {
-							$value = (int) $_POST[ $key ];
-						}
-						break;
-					default:
-						if ( ! empty( $_POST[ $key ] ) ) {
-							$value = $_POST[ $key ];
-						}
-						break;
-				}
-				$this->config[ $key ] = $value;
-			}
-
-			if ( $prev_config !== $this->config ) {
-				$result = update_option( static::CONFIG_NAME, $this->config );
-			} else {
-				$result = true;
-			}
-
-			add_action(
-				'admin_notices',
-				fn () => wp_admin_notice(
-					$result ? '設定を保存しました。' : '設定が保存できませんでした。',
-					array(
-						'type'        => $result ? 'success' : 'error',
-						'dismissible' => true,
-					),
-				),
-			);
+		if ( ! $this->check_nonce() ) {
+			return;
 		}
+
+		$result      = false;
+		$prev_config = $this->config;
+
+		foreach ( array_keys( static::DEFAULT_CONFIG ) as $key ) {
+			$value = null;
+			switch ( $key ) {
+				case 'is_enable':
+				case 'is_smtp':
+				case 'smtp_auth':
+					$value = ! empty( $_POST[ $key ] );
+					break;
+				case 'port':
+					if ( ! empty( $_POST[ $key ] ) ) {
+						$value = (int) $_POST[ $key ];
+					}
+					break;
+				default:
+					if ( ! empty( $_POST[ $key ] ) ) {
+						$value = $_POST[ $key ];
+					}
+					break;
+			}
+			$this->config[ $key ] = $value;
+		}
+
+		if ( $prev_config !== $this->config ) {
+			$result = update_option( static::CONFIG_NAME, $this->config );
+		} else {
+			$result = true;
+		}
+
+		add_action(
+			'admin_notices',
+			fn () => wp_admin_notice(
+				$result ? '設定を保存しました。' : '設定が保存できませんでした。',
+				array(
+					'type'        => $result ? 'success' : 'error',
+					'dismissible' => true,
+				),
+			),
+		);
 	}
 
 	/**
@@ -276,10 +260,10 @@ class WP_SMTP_Configurator {
 							<td>
 								<select name="smtp_secure" id="smtp_secure">
 									<option value="">なし</option>
-									<option value="tls" <?php echo esc_attr( $this->config['smtp_secure'] === 'tls' ? 'selected' : '' ); ?>>
+									<option value="<?php echo esc_attr( PHPMailer::ENCRYPTION_STARTTLS ); ?>" <?php echo esc_attr( $this->config['smtp_secure'] === PHPMailer::ENCRYPTION_STARTTLS ? 'selected' : '' ); ?>>
 										TLS
 									</option>
-									<option value="ssl" <?php echo esc_attr( $this->config['smtp_secure'] === 'ssl' ? 'selected' : '' ); ?>>
+									<option value="<?php echo esc_attr( PHPMailer::ENCRYPTION_SMTPS ); ?>" <?php echo esc_attr( $this->config['smtp_secure'] === PHPMailer::ENCRYPTION_SMTPS ? 'selected' : '' ); ?>>
 										SSL
 									</option>
 								</select>
@@ -288,10 +272,79 @@ class WP_SMTP_Configurator {
 					</tbody>
 				</table>
 				<p class="submit">
-					<input type="submit" name="submit" id="submit" class="button button-primary" value="変更を保存">
+					<button type="submit" class="button button-primary">変更を保存</button>
 				</p>
 			</form>
 		</div>
 		<?php
+	}
+
+	/**
+	 * @return string
+	 */
+	public function wp_mail_from_filter(): string {
+		return $this->config['from'];
+	}
+
+	/**
+	 * @return string
+	 */
+	public function wp_mail_from_name_filter(): string {
+		return $this->config['from_name'];
+	}
+
+	/**
+	 * @param \PHPMailer\PHPMailer\PHPMailer $phpmailer
+	 * @return void
+	 */
+	public function phpmailer_init_action( PHPMailer $phpmailer ): void {
+		$phpmailer->isSMTP();
+		$phpmailer->Host       = $this->config['host'];
+		$phpmailer->Port       = $this->config['port'];
+		$phpmailer->SMTPAuth   = $this->config['smtp_auth'];
+		$phpmailer->Username   = $this->config['smtp_auth'] ? $this->config['username'] : null;
+		$phpmailer->Password   = $this->config['smtp_auth'] ? $this->config['password'] : null;
+		$phpmailer->SMTPSecure = $this->config['smtp_secure'];
+	}
+
+	/**
+	 * @param array<string, mixed> $override_config
+	 * @return void
+	 */
+	protected function load_config( array $override_config = array() ): void {
+		$config = get_option( static::CONFIG_NAME, static::DEFAULT_CONFIG );
+
+		$load_config = apply_filters( static::CONFIG_NAME, $config );
+
+		$this->config = array( ...$load_config, ...$override_config );
+	}
+
+	/**
+	 * @return void
+	 */
+	protected function apply_config(): void {
+		remove_filter( 'wp_mail_from', array( $this, 'wp_mail_from_filter' ) );
+		remove_filter( 'wp_mail_from_name', array( $this, 'wp_mail_from_name_filter' ) );
+		remove_action( 'phpmailer_init', array( $this, 'phpmailer_init_action' ) );
+
+		if ( ! $this->config['is_enable'] ) {
+			return;
+		}
+
+		add_filter( 'wp_mail_from', array( $this, 'wp_mail_from_filter' ) );
+		add_filter( 'wp_mail_from_name', array( $this, 'wp_mail_from_name_filter' ) );
+
+		if ( ! $this->config['is_smtp'] ) {
+			return;
+		}
+
+		add_action( 'phpmailer_init', array( $this, 'phpmailer_init_action' ) );
+	}
+
+	/**
+	 * @return bool
+	 */
+	protected function check_nonce(): bool {
+		return ! empty( $_POST[ static::NONCE_NAME ] ) && check_admin_referer( static::NONCE_ACTION, static::NONCE_NAME );
 	}
 }

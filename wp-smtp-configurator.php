@@ -8,8 +8,15 @@ Author: Fumihiko Takayama
 Author URI: https://github.com/ikuno9233/
 */
 
-if ( ! defined( 'ABSPATH' ) ) {
+if ( ! defined( 'ABSPATH' ) || ! defined( 'WPINC' ) ) {
 	exit;
+}
+
+if ( ! class_exists( '\PHPMailer\PHPMailer\PHPMailer' ) ) {
+	require_once ABSPATH . WPINC . '/PHPMailer/PHPMailer.php';
+}
+if ( ! class_exists( '\PHPMailer\PHPMailer\SMTP' ) ) {
+	require_once ABSPATH . WPINC . '/PHPMailer/SMTP.php';
 }
 
 require_once __DIR__ . '/class-wp-smtp-configurator.php';
